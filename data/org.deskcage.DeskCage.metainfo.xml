@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>org.deskcage.DeskCage</id>
+  <name>DeskCage</name>
+  <summary>Run desktop applications in isolated bubblewrap sandboxes</summary>
+  <summary xml:lang="zh_CN">在隔离的 bubblewrap 沙盒中运行桌面应用</summary>
+  <description>
+    <p>
+      DeskCage manages long-lived bubblewrap sandboxes described by TOML
+      profiles. Each sandbox gets a private session bus; notifications, the
+      tray and MPRIS cross over through bus-bridge.
+    </p>
+    <p xml:lang="zh_CN">
+      DeskCage 用 TOML 配置管理长期存活的 bubblewrap 沙盒。每个沙盒拥有独立的
+      会话总线，通知、托盘和 MPRIS 通过 bus-bridge 有选择地转发。
+    </p>
+    <p>
+      It ships a command line tool, a daemon with a D-Bus interface, and this
+      Qt front end for editing profiles and following running instances.
+    </p>
+    <p xml:lang="zh_CN">
+      项目提供命令行工具、带 D-Bus 接口的守护进程，以及这个用于编辑配置和查看
+      运行实例的 Qt 界面。
+    </p>
+  </description>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+  <launchable type="desktop-id">org.deskcage.DeskCage.desktop</launchable>
+  <provides>
+    <binary>dcage</binary>
+    <binary>dcage-gui</binary>
+  </provides>
+  <content_rating type="oars-1.0"/>
+  <releases>
+    <release version="0.1.0" date="2026-11-01"/>
+  </releases>
+</component>

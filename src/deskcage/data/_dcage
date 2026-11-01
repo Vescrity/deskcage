@@ -1,0 +1,27 @@
+#compdef dcage
+# zsh completion for dcage: every candidate comes from ``dcage _complete``.
+
+_dcage() {
+    local -a candidates
+    local line
+    candidates=()
+    while IFS= read -r line; do
+        [[ -n $line ]] && candidates+=("$line")
+    done < <(dcage _complete $((CURRENT - 2)) "${words[@]:1}" 2>/dev/null)
+    if (( ${#candidates} )); then
+        # ``KEY=`` and ``dir/`` are prefixes, not finished words.
+        if [[ ${candidates[-1]} == *= || ${candidates[-1]} == */ ]]; then
+            compadd -S '' -a candidates
+        else
+            compadd -a candidates
+        fi
+    else
+        _files
+    fi
+}
+
+if [ "$funcstack[1]" = "_dcage" ]; then
+    _dcage "$@"
+else
+    compdef _dcage dcage
+fi

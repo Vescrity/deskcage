@@ -1,0 +1,13 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=DeskCage
+GenericName=Sandbox Manager
+Comment=Run desktop applications in isolated bubblewrap sandboxes
+Comment[zh_CN]=在隔离的 bubblewrap 沙盒中运行桌面应用
+Exec=dcage-gui
+Icon=security-high
+Terminal=false
+Categories=System;
+Keywords=sandbox;bubblewrap;isolation;container;
+StartupWMClass=deskcage

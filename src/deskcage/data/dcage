@@ -1,0 +1,18 @@
+# bash completion for dcage: every candidate comes from ``dcage _complete``.
+
+_dcage() {
+    local -a candidates
+    (( COMP_CWORD < 1 )) && return 0
+    mapfile -t candidates < <(
+        dcage _complete "$((COMP_CWORD - 1))" "${COMP_WORDS[@]:1}" 2>/dev/null
+    )
+    COMPREPLY=("${candidates[@]}")
+    # ``KEY=`` and ``dir/`` are prefixes, not finished words: do not glue a
+    # space to them, or the user has to delete it before typing the rest.
+    if (( ${#COMPREPLY[@]} )) &&
+        [[ ${COMPREPLY[-1]} == *= || ${COMPREPLY[-1]} == */ ]]; then
+        compopt -o nospace 2>/dev/null
+    fi
+}
+
+complete -o default -F _dcage dcage

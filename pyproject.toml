@@ -1,0 +1,47 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "deskcage"
+dynamic = ["version"]
+description = "Profile-based bubblewrap sandbox manager with long-lived instances"
+readme = "README.md"
+license = "GPL-3.0-or-later"
+license-files = ["LICENSE"]
+requires-python = ">=3.11"
+dependencies = []
+keywords = ["sandbox", "bubblewrap", "dbus", "desktop", "isolation"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: X11 Applications :: Qt",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Topic :: Desktop Environment",
+    "Topic :: System :: Systems Administration",
+]
+
+[project.scripts]
+dcage = "deskcage.cli:main"
+dcaged = "deskcage.daemon:main"
+
+[project.gui-scripts]
+dcage-gui = "deskcage.gui_entry:main"
+
+[project.optional-dependencies]
+gui = ["PyQt6>=6.4"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.dynamic]
+version = { attr = "deskcage.__version__" }
+
+[tool.setuptools.package-data]
+deskcage = ["translations/*.qm", "translations/*.ts", "data/*"]
+
+[tool.setuptools.data-files]
+"share/applications" = ["data/org.deskcage.DeskCage.desktop"]
+"share/metainfo" = ["data/org.deskcage.DeskCage.metainfo.xml"]
+"share/bash-completion/completions" = ["src/deskcage/data/dcage"]
+"share/zsh/site-functions" = ["src/deskcage/data/_dcage"]
