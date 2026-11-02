@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import glob
 import os
+import re
 import shlex
 import shutil
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from .profile import ENV_GROUPS, Profile
@@ -14,7 +16,14 @@ from .profile import ENV_GROUPS, Profile
 
 @dataclass
 class Layout:
-    """Host-side paths that the sandbox needs to see."""
+    """Host-side paths that the sandbox needs to see.
+
+    ``env`` is the environment of the process that asked for the sandbox
+    (``dcage``, ``dcage-gui`` or a test), not the daemon's own environment:
+    the daemon usually outlives the shell that started it, so its copy goes
+    stale.  Everything the sandbox inherits from the host — presets, display
+    variables and path expansion — is resolved against this snapshot.
+    """
 
     instance_id: str
     instance_dir: Path
@@ -24,6 +33,7 @@ class Layout:
     home: str
     runtime_dir: str
     python: str
+    env: Mapping[str, str] = field(default_factory=lambda: dict(os.environ))
 
     @classmethod
     def create(
@@ -32,9 +42,11 @@ class Layout:
         instance_dir: Path,
         agent_source: Path,
         log_dir: Path | None = None,
+        env: Mapping[str, str] | None = None,
     ) -> "Layout":
-        home = os.path.expanduser("~")
-        runtime = os.environ.get("XDG_RUNTIME_DIR", "")
+        host = dict(os.environ if env is None else env)
+        home = host.get("HOME") or os.path.expanduser("~")
+        runtime = host.get("XDG_RUNTIME_DIR", "")
         python = "/usr/bin/python3"
         if not os.path.exists(python):
             python = shutil.which("python3") or "python3"
@@ -47,11 +59,51 @@ class Layout:
             home=home,
             runtime_dir=runtime,
             python=python,
+            env=host,
         )
 
 
-def expand_path(value: str) -> str:
-    return os.path.abspath(os.path.expandvars(os.path.expanduser(value)))
+def snapshot_environ() -> dict[str, str]:
+    """The calling process's environment, limited to what D-Bus can carry.
+
+    Environment entries are bytes; D-Bus strings must be valid UTF-8.  A value
+    with a surrogate escape (a non-UTF-8 byte) cannot be sent, so it is left
+    out rather than failing the whole launch.
+    """
+
+    env: dict[str, str] = {}
+    for key, value in os.environ.items():
+        try:
+            key.encode("utf-8")
+            value.encode("utf-8")
+        except UnicodeEncodeError:
+            continue
+        env[key] = value
+    return env
+
+
+_VAR = re.compile(r"\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))")
+
+
+def _expand_vars(value: str, env: Mapping[str, str]) -> str:
+    def replace(match: re.Match[str]) -> str:
+        name = match.group(1) or match.group(2)
+        return env.get(name, match.group(0))
+
+    return _VAR.sub(replace, value)
+
+
+def expand_path(value: str, env: Mapping[str, str] | None = None) -> str:
+    """Expand ``~`` and ``$VAR`` from ``env``, then make the path absolute."""
+
+    host = os.environ if env is None else env
+    text = value
+    if text == "~" or text.startswith("~/"):
+        home = host.get("HOME")
+        text = home + text[1:] if home else os.path.expanduser(text)
+    elif text.startswith("~"):
+        text = os.path.expanduser(text)
+    return os.path.abspath(_expand_vars(text, host))
 
 
 def _runtime_socket(layout: Layout, name: str) -> str:
@@ -68,11 +120,11 @@ def _resolv_target(path: str = "/etc/resolv.conf") -> str | None:
 
 
 def _xauthority_path(layout: Layout) -> str:
-    return os.environ.get("XAUTHORITY") or os.path.join(layout.home, ".Xauthority")
+    return layout.env.get("XAUTHORITY") or os.path.join(layout.home, ".Xauthority")
 
 
 def environment(profile: Profile, layout: Layout, bus_address: str | None) -> dict[str, str]:
-    host = os.environ
+    host = layout.env
     env: dict[str, str] = {
         "HOME": layout.home,
         "PATH": "/usr/local/bin:/usr/bin:/bin",
@@ -303,12 +355,14 @@ def overlay_supported() -> bool:
     return any(line.split()[-1:] == ["overlay"] for line in text.splitlines())
 
 
-def tmpbind_missing(profile: Profile) -> list[str]:
+def tmpbind_missing(
+    profile: Profile, env: Mapping[str, str] | None = None
+) -> list[str]:
     """Expanded tmpbind sources that do not exist on this host."""
 
     return [
         path
-        for path in (expand_path(value) for value in profile.tmpbind)
+        for path in (expand_path(value, env) for value in profile.tmpbind)
         if not os.path.exists(path)
     ]
 
@@ -333,7 +387,7 @@ def _runtime_mounts(profile: Profile, layout: Layout) -> list[Mount]:
     # Sockets only need connect(); a read-only bind keeps them working while
     # preventing the sandbox from replacing or unlinking them.
     if profile.wayland:
-        display = os.environ.get("WAYLAND_DISPLAY") or "wayland-0"
+        display = layout.env.get("WAYLAND_DISPLAY") or "wayland-0"
         socket = display if os.path.isabs(display) else _runtime_socket(layout, display)
         mounts.append(Mount("ro", socket, socket))
     if profile.pipewire:
@@ -352,7 +406,7 @@ def _runtime_mounts(profile: Profile, layout: Layout) -> list[Mount]:
 def _x11_mounts(profile: Profile, layout: Layout) -> list[Mount]:
     if not profile.x11:
         return []
-    xauthority = os.environ.get("XAUTHORITY") or os.path.join(
+    xauthority = layout.env.get("XAUTHORITY") or os.path.join(
         layout.home, ".Xauthority"
     )
     return [
@@ -389,18 +443,18 @@ def _device_mounts(profile: Profile) -> list[Mount]:
     return mounts + _nvidia_mounts(profile)
 
 
-def _file_mounts(profile: Profile) -> list[Mount]:
+def _file_mounts(profile: Profile, layout: Layout) -> list[Mount]:
     mounts: list[Mount] = []
     for value in profile.readonly:
-        path = expand_path(value)
+        path = expand_path(value, layout.env)
         mounts.append(Mount("ro", path, path))
     for value in profile.readwrite:
-        path = expand_path(value)
+        path = expand_path(value, layout.env)
         mounts.append(Mount("rw", path, path))
     for value in profile.tmpfs:
-        mounts.append(Mount("tmpfs", expand_path(value)))
+        mounts.append(Mount("tmpfs", expand_path(value, layout.env)))
     for value in profile.tmpbind:
-        path = expand_path(value)
+        path = expand_path(value, layout.env)
         # --overlay-src has no -try variant.  A missing source means there is
         # nothing to overlay, so skipping it is the portable behaviour.
         if not os.path.exists(path):
@@ -432,7 +486,7 @@ def all_mounts(profile: Profile, layout: Layout) -> list[Mount]:
         + _runtime_mounts(profile, layout)
         + _x11_mounts(profile, layout)
         + _device_mounts(profile)
-        + _file_mounts(profile)
+        + _file_mounts(profile, layout)
     )
 
 
@@ -510,15 +564,15 @@ def option_sections(profile: Profile, layout: Layout) -> list[tuple[str, list[st
         ("Tmpfs", profile.tmpfs, "tmpfs"),
     ):
         if values:
-            mounts = [
-                Mount(kind, expand_path(value), expand_path(value))
-                for value in values
-            ]
+            mounts = []
+            for value in values:
+                path = expand_path(value, layout.env)
+                mounts.append(Mount(kind, path, path))
             sections.append((title, _lines(mounts)))
     if profile.tmpbind:
         lines: list[str] = []
         for value in profile.tmpbind:
-            path = expand_path(value)
+            path = expand_path(value, layout.env)
             if os.path.exists(path):
                 lines.append(shlex.join(Mount("overlay", path, path).argv()))
             else:

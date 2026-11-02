@@ -207,7 +207,11 @@ MOZ_ENABLE_WAYLAND = "1"     # 字符串：固定值
 
 `[env-preset]` 整组开关宿主变量（`xdg`、`session`、`theme`、`proxy`），
 新建的配置默认打开 `xdg` 和 `session`。其余全部来自 `[env]`：字符串按原样写入，
-`true` 表示启动沙盒时读取宿主同名变量（宿主没有定义就不设置）。
+`true` 表示从启动沙盒的那个进程（`dcage` 或 `dcage-gui`，而不是常驻的
+`dcaged`）继承同名变量；该进程没有定义就不设置。显示变量以及配置里 `~`/`$VAR`
+的展开同样使用这份环境快照，所以不会读到守护进程里已经过期的值。
+
+沙盒会一直保留启动时的环境；修改了 `WAYLAND_DISPLAY` 之类的变量后，请重新启动实例。
 
 展开时先应用变量组，再应用单条条目，所以 `LANG = "C"` 这样的条目会覆盖预设里
 的值。
@@ -357,9 +361,12 @@ make            # pylupdate6 更新 .ts，lrelease6 重新编译 .qm
 
 * 配置：`ListProfiles`、`GetProfile`、`SaveProfile`、`DeleteProfile`、
   `DuplicateProfile`、`RenameProfile`
-* 实例：`Launch(profile, id, keep, argv, env, cwd, reuse)`、`ListInstances`、
-  `GetInstance`、`Spawn`、`StopInstance`、`SetKeepAlive`、`Shutdown`
+* 实例：`Launch(profile, id, keep, argv, env, cwd, reuse, caller_env)`、
+  `ListInstances`、`GetInstance`、`Spawn`、`StopInstance`、`SetKeepAlive`、`Shutdown`
 * 信号：`InstanceChanged(id, state)`、`ProcessExited(instance, pid, status)`
+
+`caller_env` 是启动沙盒的进程的环境，`[env] KEY = true` 和各个预设都按它解析。
+旧版本启动的守护进程无法使用它，升级后执行一次 `dcage daemon --replace`。
 
 `GetInstance` 返回 `a{sv}`；其中 `processes` 是一个 JSON 字符串，包含 pid、
 argv、启动时间、日志路径和退出状态。错误以 `org.deskcage.Manager1.Error` 返回。

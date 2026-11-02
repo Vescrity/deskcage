@@ -14,6 +14,7 @@ import harness
 from deskcage import config
 from deskcage.cli import live_rows
 from deskcage.client import ManagerClient, ManagerError
+from deskcage.profile import Profile
 
 
 def dbus_contract() -> None:
@@ -27,11 +28,35 @@ def dbus_contract() -> None:
     interface = node.lookup_interface(daemon.INTERFACE)
     method = interface.lookup_method("Launch")
     signature = "".join(arg.signature for arg in method.in_args)
-    assert signature == "ssbasa{ss}sb", signature
+    assert signature == "ssbasa{ss}sba{ss}", signature
 
     rename = interface.lookup_method("RenameProfile")
     assert "".join(arg.signature for arg in rename.in_args) == "ss"
     assert "".join(arg.signature for arg in rename.out_args) == "s"
+
+
+def launch_carries_caller_env() -> None:
+    """Launch sends the calling process's environment alongside the profile."""
+
+    from gi.repository import GLib
+
+    client = ManagerClient.__new__(ManagerClient)
+    seen: dict[str, tuple] = {}
+
+    def fake_call(method, params, reply, timeout=60000):
+        seen["payload"] = params.unpack()
+        return GLib.Variant("(s)", ("demo",))
+
+    client.call = fake_call
+    os.environ["DESKCAGE_LAUNCH_SENTINEL"] = "from-caller"
+    try:
+        assert client.launch("p") == "demo"
+        payload = seen["payload"]
+        assert payload[-1]["DESKCAGE_LAUNCH_SENTINEL"] == "from-caller", payload
+        assert client.launch("p", caller_env={"HOME": "/x"}) == "demo"
+        assert seen["payload"][-1] == {"HOME": "/x"}, seen["payload"]
+    finally:
+        os.environ.pop("DESKCAGE_LAUNCH_SENTINEL", None)
 
 
 def live_filter() -> None:
@@ -124,7 +149,9 @@ def daemon_log_location() -> None:
 
 
 def main() -> int:
+    os.environ.pop("DESKCAGE_CALLER_ENV", None)
     dbus_contract()
+    launch_carries_caller_env()
     live_filter()
     with harness.TestEnv() as env:
         assert env.cli("daemon", "--stop", check=False).returncode == 1
@@ -184,6 +211,46 @@ def main() -> int:
         # Renaming to the same id is a no-op, not an error.
         assert env.cli("profile", "rename", "rn2", "rn2").stdout.strip() == "rn2"
         env.cli("profile", "delete", "rn2")
+
+        # Inheritance follows the process that starts the sandbox, not the
+        # daemon.  The daemon was started above without this variable, so
+        # only the caller's environment can supply it.
+        profiles = env.config_home / "dcage" / "profiles"
+        profiles.mkdir(parents=True, exist_ok=True)
+        (profiles / "caller-env.toml").write_text(
+            Profile(
+                id="caller-env",
+                bus="none",
+                keep_alive=False,
+                command=["sh", "-c", "echo caller=$DESKCAGE_CALLER_ENV"],
+                env={"DESKCAGE_CALLER_ENV": True},
+            ).to_toml(),
+            encoding="utf-8",
+        )
+        os.environ["DESKCAGE_CALLER_ENV"] = "from-cli"
+        try:
+            out = env.cli("start", "caller-env", "--instance", "caller-env-1")
+            assert out.stdout.strip() == "caller-env-1", out
+            assert harness.wait_until(
+                lambda: not (
+                    env.runtime_dir / "dcage" / "instances" / "caller-env-1"
+                ).exists(),
+                10,
+            )
+            assert "caller=from-cli" in env.cli("logs", "caller-env-1").stdout
+        finally:
+            os.environ.pop("DESKCAGE_CALLER_ENV", None)
+        out = env.cli("start", "caller-env", "--instance", "caller-env-2")
+        assert out.stdout.strip() == "caller-env-2", out
+        assert harness.wait_until(
+            lambda: not (
+                env.runtime_dir / "dcage" / "instances" / "caller-env-2"
+            ).exists(),
+            10,
+        )
+        second = env.cli("logs", "caller-env-2").stdout
+        assert "caller=\n" in second or second.rstrip().endswith("caller="), second
+        env.cli("profile", "delete", "caller-env")
 
         # The exact command a profile would run, for scripts and bug reports.
         command = env.cli("profile", "command", "t")

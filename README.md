@@ -225,9 +225,14 @@ enabled desktop channels (`DISPLAY`/`XAUTHORITY`, `WAYLAND_DISPLAY`,
 
 `[env-preset]` switches whole groups of host variables on (`xdg`, `session`,
 `theme`, `proxy`); new profiles enable `xdg` and `session`.  Everything else
-comes from `[env]`: a string is used verbatim, and `true` inherits the host
-value when the sandbox starts (a variable the host does not define is simply
-skipped).
+comes from `[env]`: a string is used verbatim, and `true` inherits the value
+from the process that starts the sandbox — `dcage` or `dcage-gui`, not the
+long-running `dcaged` (a variable that process does not define is simply
+skipped).  The display variables and the `~`/`$VAR` expansion of profile paths
+come from the same snapshot, so the daemon can never supply a stale value.
+
+A sandbox keeps the environment it was started with; after changing something
+such as `WAYLAND_DISPLAY`, start a new instance.
 
 The groups are expanded first and the single entries after them, so an entry
 such as `LANG = "C"` overrides the value coming from a preset.
@@ -392,10 +397,15 @@ touching the daemon or running sandboxes.
 
 * profiles: `ListProfiles`, `GetProfile`, `SaveProfile`, `DeleteProfile`,
   `DuplicateProfile`, `RenameProfile`
-* instances: `Launch(profile, id, keep, argv, env, cwd, reuse)`,
+* instances: `Launch(profile, id, keep, argv, env, cwd, reuse, caller_env)`,
   `ListInstances`, `GetInstance`, `Spawn`, `StopInstance`, `SetKeepAlive`,
   `Shutdown`
 * signals: `InstanceChanged(id, state)`, `ProcessExited(instance, pid, status)`
+
+`caller_env` is the environment of the process that launched the sandbox; it
+is what `[env] KEY = true` and the presets resolve against.  A daemon started
+by an older build cannot honour it, so after an upgrade run
+`dcage daemon --replace` once.
 
 `GetInstance` returns `a{sv}`; `processes` is a JSON string with pid, argv,
 start time, log path and exit status.  Errors are returned as

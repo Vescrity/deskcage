@@ -11,6 +11,7 @@ import subprocess
 import threading
 import time
 import traceback
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
@@ -205,6 +206,7 @@ class Instance:
         host_bus_address: str | None,
         keep: bool | None = None,
         on_change: Callable[["Instance"], None] | None = None,
+        caller_env: Mapping[str, str] | None = None,
     ):
         self.id = instance_id
         self.profile = profile
@@ -218,6 +220,7 @@ class Instance:
             self.dir,
             Path(__file__).resolve().with_name("agent.py"),
             log_dir=self.log_dir,
+            env=caller_env,
         )
         self.host_bus_address = host_bus_address
         self.bus: BusInfo | None = None
@@ -241,7 +244,7 @@ class Instance:
     # ------------------------------------------------------------------ start
 
     def start(self) -> "Instance":
-        missing = sandbox.tmpbind_missing(self.profile)
+        missing = sandbox.tmpbind_missing(self.profile, self.layout.env)
         if missing and self.profile.tmpbind_strict:
             raise InstanceError(
                 "tmpbind source(s) do not exist and files.tmpbind_strict is on: "

@@ -13,7 +13,7 @@ from typing import Any, Callable
 
 from gi.repository import Gio, GLib
 
-from . import config
+from . import config, sandbox
 from .daemon import BUS_NAME, INTERFACE, OBJECT_PATH
 
 
@@ -496,11 +496,14 @@ class ManagerClient:
         env: dict[str, str] | None = None,
         cwd: str = "",
         reuse: bool = False,
+        caller_env: dict[str, str] | None = None,
     ) -> str:
+        if caller_env is None:
+            caller_env = sandbox.snapshot_environ()
         reply = self.call(
             "Launch",
             GLib.Variant(
-                "(ssbasa{ss}sb)",
+                "(ssbasa{ss}sba{ss})",
                 (
                     profile,
                     instance,
@@ -509,6 +512,7 @@ class ManagerClient:
                     dict(env or {}),
                     cwd,
                     reuse,
+                    dict(caller_env),
                 ),
             ),
             "(s)",

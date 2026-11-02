@@ -171,9 +171,92 @@ def resolv_symlink() -> None:
     assert sandbox._resolv_target(str(link)) is None
 
 
+def caller_environment() -> None:
+    """Everything inherited from the host comes from the caller's snapshot."""
+
+    tmp = Path(tempfile.mkdtemp(prefix="deskcage-caller-"))
+    home = tmp / "home"
+    home.mkdir()
+    authority = tmp / "Xauthority"
+    authority.write_text("", encoding="utf-8")
+    host = {
+        "HOME": str(home),
+        "XDG_RUNTIME_DIR": str(tmp / "run"),
+        "WAYLAND_DISPLAY": "wayland-9",
+        "DISPLAY": ":7",
+        "XAUTHORITY": str(authority),
+        "PULSE_SERVER": "unix:/run/user/1/pulse/native",
+        "PIPEWIRE_REMOTE": "pipewire-9",
+        "LANG": "zz_ZZ.UTF-8",
+        "XDG_DATA_HOME": str(home / "share"),
+        "DESKCAGE_CALLER": "caller-value",
+    }
+    base = sandbox.Layout.create(
+        "caller", tmp, Path("/tmp/agent.py"), log_dir=tmp / "logs", env=host
+    )
+    assert base.home == str(home)
+    assert base.runtime_dir == host["XDG_RUNTIME_DIR"]
+
+    profile = Profile(
+        id="caller",
+        home="bind",
+        bus="none",
+        x11=True,
+        wayland=True,
+        pulse=True,
+        pipewire=True,
+        env_presets=["session"],
+        env={"DESKCAGE_CALLER": True, "DESKCAGE_CALLER_MISSING": True},
+        readonly=["~/data"],
+        tmpbind=["~/data"],
+    )
+    env = sandbox.environment(profile, base, None)
+    assert env["HOME"] == str(home)
+    assert env["XDG_RUNTIME_DIR"] == host["XDG_RUNTIME_DIR"]
+    assert env["WAYLAND_DISPLAY"] == "wayland-9"
+    assert env["DISPLAY"] == ":7"
+    assert env["XAUTHORITY"] == str(authority)
+    assert env["PULSE_SERVER"] == host["PULSE_SERVER"]
+    assert env["PIPEWIRE_REMOTE"] == "pipewire-9"
+    assert env["LANG"] == "zz_ZZ.UTF-8"
+    assert env["DESKCAGE_CALLER"] == "caller-value"
+    assert "DESKCAGE_CALLER_MISSING" not in env
+
+    argv = sandbox.build(profile, base, None)
+    sets = {
+        argv[index + 1]: argv[index + 2]
+        for index, item in enumerate(argv)
+        if item == "--setenv" and index + 2 < len(argv)
+    }
+    assert sets["HOME"] == str(home)
+    assert sets["WAYLAND_DISPLAY"] == "wayland-9"
+    assert sets["DESKCAGE_CALLER"] == "caller-value"
+
+    # A variable that only exists in this process is not inherited: the
+    # snapshot, not the daemon's or the test's os.environ, is authoritative.
+    os.environ["DESKCAGE_ONLY_OS"] = "os-value"
+    try:
+        only_os = Profile(id="only-os", env={"DESKCAGE_ONLY_OS": True})
+        assert "DESKCAGE_ONLY_OS" not in sandbox.environment(only_os, base, None)
+    finally:
+        os.environ.pop("DESKCAGE_ONLY_OS", None)
+
+    assert sandbox.expand_path("~/data", host) == str(home / "data")
+    assert sandbox.expand_path(
+        "$XDG_DATA_HOME/app", host
+    ) == str(home / "share" / "app")
+    # Unknown variables stay put, exactly like os.path.expandvars.
+    assert sandbox.expand_path("/tmp/$DESKCAGE_NOPE", host) == "/tmp/$DESKCAGE_NOPE"
+
+    assert sandbox.tmpbind_missing(profile, host) == [str(home / "data")]
+    (home / "data").mkdir()
+    assert sandbox.tmpbind_missing(profile, host) == []
+
+
 def main() -> int:
     mount_order()
     resolv_symlink()
+    caller_environment()
     tmp = Path(tempfile.mkdtemp(prefix="deskcage-argv-"))
     base = layout(tmp)
     profile = Profile(
@@ -216,41 +299,45 @@ def main() -> int:
         os.environ.get("WAYLAND_DISPLAY") or "wayland-0"
     )
 
-    # ``true`` inherits from the host, a string is used verbatim, and a
-    # variable the host does not define is simply not passed.
-    os.environ["DESKCAGE_TEST_PASS"] = "host-value"
-    try:
-        inherited = Profile(id="inherit", env={"DESKCAGE_TEST_PASS": True})
-        resolved = sandbox.environment(inherited, base, None)
-        assert resolved["DESKCAGE_TEST_PASS"] == "host-value"
-        missing = sandbox.environment(
-            Profile(id="missing", env={"DESKCAGE_TEST_MISSING": True}), base, None
-        )
-        assert "DESKCAGE_TEST_MISSING" not in missing
-        literal = sandbox.environment(
-            Profile(id="literal", env={"DESKCAGE_TEST_PASS": "own"}), base, None
-        )
-        assert literal["DESKCAGE_TEST_PASS"] == "own"
-    finally:
-        os.environ.pop("DESKCAGE_TEST_PASS", None)
+    # ``true`` inherits from the caller's snapshot, a string is used verbatim,
+    # and a variable the caller does not define is simply not passed.
+    host = dict(base.env)
+    host["DESKCAGE_TEST_PASS"] = "host-value"
+    host_layout = sandbox.Layout.create(
+        "host", tmp, Path("/tmp/agent.py"), env=host
+    )
+    host_layout.runtime_dir = base.runtime_dir
+    inherited = Profile(id="inherit", env={"DESKCAGE_TEST_PASS": True})
+    resolved = sandbox.environment(inherited, host_layout, None)
+    assert resolved["DESKCAGE_TEST_PASS"] == "host-value"
+    missing = sandbox.environment(
+        Profile(id="missing", env={"DESKCAGE_TEST_MISSING": True}),
+        host_layout,
+        None,
+    )
+    assert "DESKCAGE_TEST_MISSING" not in missing
+    literal = sandbox.environment(
+        Profile(id="literal", env={"DESKCAGE_TEST_PASS": "own"}),
+        host_layout,
+        None,
+    )
+    assert literal["DESKCAGE_TEST_PASS"] == "own"
 
-    saved = {key: os.environ.get(key) for key in ("DISPLAY", "XAUTHORITY")}
-    try:
-        authority = tmp / "Xauthority"
-        authority.write_text("", encoding="utf-8")
-        os.environ["DISPLAY"] = ":0"
-        os.environ["XAUTHORITY"] = str(authority)
-        x11 = Profile(id="x11", x11=True)
-        assert sandbox.environment(x11, base, None)["XAUTHORITY"] == str(authority)
-        assert index_of(
-            sandbox.build(x11, base, None), "--ro-bind-try", str(authority)
-        )
-    finally:
-        for key, value in saved.items():
-            if value is None:
-                os.environ.pop(key, None)
-            else:
-                os.environ[key] = value
+    authority = tmp / "Xauthority"
+    authority.write_text("", encoding="utf-8")
+    x11_host = dict(base.env)
+    x11_host.update({"DISPLAY": ":0", "XAUTHORITY": str(authority)})
+    x11_layout = sandbox.Layout.create(
+        "x11", tmp, Path("/tmp/agent.py"), env=x11_host
+    )
+    x11_layout.runtime_dir = base.runtime_dir
+    x11 = Profile(id="x11", x11=True)
+    assert sandbox.environment(x11, x11_layout, None)["XAUTHORITY"] == str(
+        authority
+    )
+    assert index_of(
+        sandbox.build(x11, x11_layout, None), "--ro-bind-try", str(authority)
+    )
 
     notmp = Profile(id="tmp", home="tmp")
     argv = sandbox.build(notmp, base, None, keep=True)

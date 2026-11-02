@@ -63,6 +63,7 @@ XML = f"""<node>
       <arg type="a{{ss}}" name="env" direction="in"/>
       <arg type="s" name="cwd" direction="in"/>
       <arg type="b" name="reuse" direction="in"/>
+      <arg type="a{{ss}}" name="caller_env" direction="in"/>
       <arg type="s" name="instance" direction="out"/>
     </method>
     <method name="ListInstances">
@@ -182,6 +183,7 @@ class Manager:
         env: dict[str, str],
         cwd: str,
         reuse: bool = False,
+        caller_env: dict[str, str] | None = None,
     ) -> str:
         if self.shutting_down:
             raise InstanceError("daemon is shutting down")
@@ -219,6 +221,7 @@ class Manager:
             self._host_bus(),
             keep=keep,
             on_change=self._on_instance_change,
+            caller_env=caller_env,
         )
         with self._lock:
             self.instances[instance_id] = instance
@@ -347,9 +350,27 @@ class Manager:
             env = dict(params.get_child_value(4).unpack())
             cwd = params.get_child_value(5).get_string()
             reuse = params.get_child_value(6).get_boolean()
+            # Clients older than the caller_env argument fall back to the
+            # daemon's own environment, which is what they used to get.
+            caller_env = (
+                dict(params.get_child_value(7).unpack())
+                if params.n_children() > 7
+                else dict(os.environ)
+            )
             return GLib.Variant(
                 "(s)",
-                (self.launch(profile_id, instance_id, keep, argv, env, cwd, reuse),),
+                (
+                    self.launch(
+                        profile_id,
+                        instance_id,
+                        keep,
+                        argv,
+                        env,
+                        cwd,
+                        reuse,
+                        caller_env,
+                    ),
+                ),
             )
         if method == "ListInstances":
             return GLib.Variant("(a(ssssbi))", (self.list_instances(),))
